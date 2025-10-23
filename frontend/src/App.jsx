@@ -1,27 +1,42 @@
 import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { connectWS } from './ws';
+import { LandingPage } from './components/LandingPage';
+import { ChatInterface } from './components/ChatInterface';
+import { NameInputModal } from './components/NameInputModal';
+import { AIBotPlaceholder } from './components/AIBotPlaceholder';
+import './styles/globals.css';
 
 export default function App() {
-    const timer = useRef(null);
     const socket = useRef(null);
     const [userName, setUserName] = useState('');
-    const [showNamePopup, setShowNamePopup] = useState(true);
-    const [inputName, setInputName] = useState('');
+    const [showNamePopup, setShowNamePopup] = useState(false);
+    const [showLanding, setShowLanding] = useState(true);
     const [typers, setTypers] = useState([]);
-
     const [messages, setMessages] = useState([]);
-    const [text, setText] = useState('');
+    const [isConnected, setIsConnected] = useState(false);
 
     useEffect(() => {
         socket.current = connectWS();
 
         socket.current.on('connect', () => {
+            console.log('Connected to server');
+            setIsConnected(true);
+            
             socket.current.on('roomNotice', (userName) => {
                 console.log(`${userName} joined to group!`);
+                // Add system message for user join
+                const systemMessage = {
+                    id: Date.now() + Math.random(),
+                    sender: 'System',
+                    text: `${userName} joined the chat`,
+                    ts: Date.now(),
+                    isSystem: true
+                };
+                setMessages((prev) => [...prev, systemMessage]);
             });
 
             socket.current.on('chatMessage', (msg) => {
-                // push to existing messages list
                 console.log('msg', msg);
                 setMessages((prev) => [...prev, msg]);
             });
@@ -32,7 +47,6 @@ export default function App() {
                     if (!isExist) {
                         return [...prev, userName];
                     }
-
                     return prev;
                 });
             });
@@ -42,184 +56,158 @@ export default function App() {
             });
         });
 
+        socket.current.on('disconnect', () => {
+            console.log('Disconnected from server');
+            setIsConnected(false);
+        });
+
         return () => {
-            socket.current.off('roomNotice');  //cleanup listeners 
-            socket.current.off('chatMessage');
-            socket.current.off('typing');
-            socket.current.off('stopTyping');
+            if (socket.current) {
+                socket.current.off('roomNotice');
+                socket.current.off('chatMessage');
+                socket.current.off('typing');
+                socket.current.off('stopTyping');
+                socket.current.off('connect');
+                socket.current.off('disconnect');
+            }
         };
     }, []);
 
-    useEffect(() => {
-        if (text) {
-            socket.current.emit('typing', userName);
-            clearTimeout(timer.current);
-        }
+    // Typing functionality is now handled in ChatInterface component
 
-        timer.current = setTimeout(() => {
-            socket.current.emit('stopTyping', userName);
-        }, 1000);
+    const handleGetStarted = () => {
+        setShowLanding(false);
+        setShowNamePopup(true);
+    };
 
-        return () => {
-            clearTimeout(timer.current);
-        };
-    }, [text, userName]);
-
-    // FORMAT TIMESTAMP TO HH:MM FOR MESSAGES
-    function formatTime(ts) {
-        const d = new Date(ts);
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        return `${hh}:${mm}`;
-    }
-
-    // SUBMIT NAME TO GET STARTED, OPEN CHAT WINDOW WITH INITIAL MESSAGE
-    function handleNameSubmit(e) {
-        e.preventDefault();
-        const trimmed = inputName.trim();
+    const handleNameSubmit = async (name) => {
+        const trimmed = name.trim();
         if (!trimmed) return;
 
-        // join room
-        socket.current.emit('joinRoom', trimmed);
+        // Join room
+        socket.current?.emit('joinRoom', trimmed);
 
         setUserName(trimmed);
         setShowNamePopup(false);
-    }
+        
+        // Add welcome message
+        const welcomeMessage = {
+            id: Date.now(),
+            sender: 'System',
+            text: `Welcome to the chat, ${trimmed}!`,
+            ts: Date.now(),
+            isSystem: true
+        };
+        setMessages([welcomeMessage]);
+    };
 
-    // SEND MESSAGE FUNCTION
-    function sendMessage() {
-        const t = text.trim();
-        if (!t) return;
+    const handleSendMessage = (messageText) => {
+        if (!messageText.trim()) return;
 
-        // USER MESSAGE
         const msg = {
             id: Date.now(),
             sender: userName,
-            text: t,
+            text: messageText,
             ts: Date.now(),
         };
+        
         setMessages((m) => [...m, msg]);
+        socket.current?.emit('chatMessage', msg);
+    };
 
-        // emit
-        socket.current.emit('chatMessage', msg);
-
-        setText('');
-    }
-
-    // HANDLE ENTER KEY TO SEND MESSAGE
-    function handleKeyDown(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    }
+    const handleBackToLanding = () => {
+        setShowLanding(true);
+        setShowNamePopup(false);
+        setUserName('');
+        setMessages([]);
+        setTypers([]);
+    };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-zinc-100 p-4 font-inter">
-            {/* ENTER YOUR NAME TO START CHATTING */}
-            {showNamePopup && (
-                <div className="fixed inset-0 flex items-center justify-center z-40">
-                    <div className="bg-white rounded-xl shadow-lg max-w-md p-6">
-                        <h1 className="text-xl font-semibold text-black">Enter your name</h1>
-                        <p className="text-sm text-gray-500 mt-1">
-                            Enter your name to start chatting. This will be used to identify
-                        </p>
-                        <form onSubmit={handleNameSubmit} className="mt-4">
-                            <input
-                                autoFocus
-                                value={inputName}
-                                onChange={(e) => setInputName(e.target.value)}
-                                className="w-full border border-gray-200 rounded-md px-3 py-2 outline-green-500 placeholder-gray-400"
-                                placeholder="Your name (e.g. John Doe)"
-                            />
-                            <button
-                                type="submit"
-                                className="block ml-auto mt-3 px-4 py-1.5 rounded-full bg-green-500 text-white font-medium cursor-pointer">
-                                Continue
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            )}
+        <div className="min-h-screen font-inter">
+            <AnimatePresence mode="wait">
+                {showLanding && (
+                    <motion.div
+                        key="landing"
+                        initial={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                    >
+                        <LandingPage onGetStarted={handleGetStarted} />
+                    </motion.div>
+                )}
 
-            {/* CHAT WINDOW */}
-            {!showNamePopup && (
-                <div className="w-full max-w-2xl h-[90vh] bg-white rounded-xl shadow-md flex flex-col overflow-hidden">
-                    {/* CHAT HEADER */}
-                    <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200">
-                        <div className="h-10 w-10 rounded-full bg-[#075E54] flex items-center justify-center text-white font-semibold">
-                            R
-                        </div>
-                        <div className="flex-1">
-                            <div className="text-sm font-medium text-[#303030]">
-                                Realtime group chat
+                {!showLanding && (
+                    <motion.div
+                        key="chat"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                        className="h-screen flex flex-col"
+                    >
+                        {/* Top Navigation */}
+                        <div className="bg-white/90 backdrop-blur-sm border-b border-gray-200 p-4 flex items-center justify-between">
+                            <div className="flex items-center space-x-3">
+                                <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                    onClick={handleBackToLanding}
+                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                >
+                                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                                    </svg>
+                                </motion.button>
+                                <h1 className="text-xl font-semibold text-gray-900">Modern Chat</h1>
                             </div>
-
-                            {typers.length ? (
-                                <div className="text-xs text-gray-500">
-                                    {typers.join(', ')} is typing...
+                            
+                            <div className="flex items-center space-x-4">
+                                <div className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm ${
+                                    isConnected 
+                                        ? 'bg-green-100 text-green-700' 
+                                        : 'bg-red-100 text-red-700'
+                                }`}>
+                                    <div className={`w-2 h-2 rounded-full ${
+                                        isConnected ? 'bg-green-500' : 'bg-red-500'
+                                    }`} />
+                                    <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
                                 </div>
-                            ) : (
-                                ''
-                            )}
+                            </div>
                         </div>
-                        <div className="text-sm text-gray-500">
-                            Signed in as{' '}
-                            <span className="font-medium text-[#303030] capitalize">
-                                {userName}
-                            </span>
-                        </div>
-                    </div>
 
-                    {/* CHAT MESSAGE LIST */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-zinc-100 flex flex-col">
-                        {messages.map((m) => {
-                            const mine = m.sender === userName;
-                            return (
-                                <div
-                                    key={m.id}
-                                    className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                                    <div
-                                        className={`max-w-[78%] p-3 my-2 rounded-[18px] text-sm leading-5 shadow-sm ${
-                                            mine
-                                                ? 'bg-[#DCF8C6] text-[#303030] rounded-br-2xl'
-                                                : 'bg-white text-[#303030] rounded-bl-2xl'
-                                        }`}>
-                                        <div className="break-words whitespace-pre-wrap">
-                                            {m.text}
-                                        </div>
-                                        <div className="flex justify-between items-center mt-1 gap-16">
-                                            <div className="text-[11px] font-bold">{m.sender}</div>
-                                            <div className="text-[11px] text-gray-500 text-right">
-                                                {formatTime(m.ts)}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    {/* CHAT TEXTAREA */}
-                    <div className="px-4 py-3 border-t border-gray-200 bg-white">
-                        <div className="flex items-center justify-between gap-4 border border-gray-200 rounded-full">
-                            <textarea
-                                rows={1}
-                                value={text}
-                                onChange={(e) => setText(e.target.value)}
-                                onKeyDown={handleKeyDown}
-                                placeholder="Type a message..."
-                                className="w-full resize-none px-4 py-4 text-sm outline-none"
-                            />
-                            <button
-                                onClick={sendMessage}
-                                className="bg-green-500 text-white px-4 py-2 mr-2 rounded-full text-sm font-medium cursor-pointer">
-                                Send
-                            </button>
+                        {/* Main Chat Area */}
+                        <div className="flex-1 flex flex-col lg:flex-row">
+                            {/* Chat Interface */}
+                            <div className="flex-1 min-h-0">
+                                <ChatInterface
+                                    messages={messages}
+                                    userName={userName}
+                                    typers={typers}
+                                    onSendMessage={handleSendMessage}
+                                    isConnected={isConnected}
+                                    socket={socket.current}
+                                />
+                            </div>
+                            
+                            {/* Sidebar with AI Bot Placeholder - Hidden on mobile */}
+                            <div className="hidden lg:block w-80 bg-white/50 backdrop-blur-sm border-l border-gray-200 p-4">
+                                <AIBotPlaceholder onActivate={() => console.log('AI Bot activation coming soon!')} />
+                            </div>
                         </div>
-                    </div>
-                </div>
-            )}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* Name Input Modal */}
+            <NameInputModal
+                isOpen={showNamePopup}
+                onSubmit={handleNameSubmit}
+                onClose={() => {
+                    setShowNamePopup(false);
+                    setShowLanding(true);
+                }}
+            />
         </div>
     );
 }
