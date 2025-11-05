@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { connectWS } from './ws';
+import { connectWS, sendEncrypted, handleIncomingMessage } from './ws';
 import { LandingPage } from './components/LandingPage';
 import { ChatInterface } from './components/ChatInterface';
 import { NameInputModal } from './components/NameInputModal';
@@ -23,7 +23,7 @@ export default function App() {
             console.log('Connected to server');
             setIsConnected(true);
             
-            socket.current.on('roomNotice', (userName) => {
+            socket.current.on('roomNotice', async (userName) => {
                 console.log(`${userName} joined to group!`);
                 // Add system message for user join
                 const systemMessage = {
@@ -34,11 +34,41 @@ export default function App() {
                     isSystem: true
                 };
                 setMessages((prev) => [...prev, systemMessage]);
+                
+                // If this is our own join notice, send the group key if we're the first one
+                if (userName === userName) {
+                    try {
+                        const key = await loadGroupKey();
+                        if (key) {
+                            console.log('Sharing group key with new user');
+                            // In a real app, you'd encrypt this with the new user's public key
+                            // For now, we'll just send it directly (not secure for production)
+                            socket.current.emit('shareGroupKey', { key });
+                        }
+                    } catch (error) {
+                        console.error('Failed to share group key:', error);
+                    }
+                }
             });
 
-            socket.current.on('chatMessage', (msg) => {
-                console.log('msg', msg);
-                setMessages((prev) => [...prev, msg]);
+            socket.current.on('chatMessage', async (msg) => {
+                try {
+                    // Handle incoming message (decrypt if needed)
+                    const decryptedMsg = await handleIncomingMessage(msg);
+                    console.log('Received message:', decryptedMsg);
+                    setMessages((prev) => [...prev, decryptedMsg]);
+                } catch (error) {
+                    console.error('Error processing message:', error);
+                    // Add error message to chat
+                    setMessages(prev => [...prev, {
+                        id: `error-${Date.now()}`,
+                        sender: 'System',
+                        text: 'Error processing message',
+                        ts: Date.now(),
+                        isSystem: true,
+                        isError: true
+                    }]);
+                }
             });
 
             socket.current.on('typing', (userName) => {
@@ -101,18 +131,19 @@ export default function App() {
         setMessages([welcomeMessage]);
     };
 
-    const handleSendMessage = (messageText) => {
-        if (!messageText.trim()) return;
-
+    const handleSendMessage = async (message) => {
+        if (!socket.current || !userName || !message.trim()) return;
+        
         const msg = {
-            id: Date.now(),
+            id: Date.now().toString(),
             sender: userName,
-            text: messageText,
+            text: message,
             ts: Date.now(),
+            isSystem: false
         };
         
-        setMessages((m) => [...m, msg]);
-        socket.current?.emit('chatMessage', msg);
+        // Send encrypted message
+        await sendEncrypted('chatMessage', msg);
     };
 
     const handleBackToLanding = () => {
